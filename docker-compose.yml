@@ -1,0 +1,77 @@
+name: hexagonal-cqrs-lab
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hex_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-hexagonal_db}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres_secret}
+    ports:
+      # Expuesto en 15432 en tu PC para no chocar con otro Postgres que tengas en el 5432
+      - "127.0.0.1:${HOST_DB_PORT:-15432}:5432"
+    volumes:
+      - hex_postgres_data:/var/lib/postgresql/data
+    networks:
+      - hexagonal_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-hexagonal_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  floci-az:
+    image: floci/floci-az:latest
+    container_name: hex_floci_az
+    restart: unless-stopped
+    environment:
+      - FLOCI_HOSTNAME=floci-az
+      - FLOCI_AZ_STORAGE_MODE=persistent
+    ports:
+      # Expuesto en 14577 hacia tu PC; internamente el backend lo ve en floci-az:4577
+      - "127.0.0.1:${HOST_FLOCI_PORT:-14577}:4577"
+    volumes:
+      - hex_floci_data:/app/data
+    networks:
+      - hexagonal_net
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hex_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      floci-az:
+        condition: service_started
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      # ¡OJO! Dentro de la red interna el host es el nombre del servicio ("postgres") y el puerto interno (5432)
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-hexagonal_db}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres_secret}
+      FLOCI_AZ_ENDPOINT: http://floci-az:4577
+    ports:
+      # Expuesto en 3080 en tu PC para no chocar con otros microservicios en el 3000
+      - "127.0.0.1:${HOST_API_PORT:-3080}:3000"
+    volumes:
+      # Sincroniza tu carpeta src en vivo para que tsx watch recargue al guardar
+      - ./src:/app/src
+    networks:
+      - hexagonal_net
+
+networks:
+  hexagonal_net:
+    name: hexagonal_isolated_net
+    driver: bridge
+
+volumes:
+  hex_postgres_data:
+  hex_floci_data:
